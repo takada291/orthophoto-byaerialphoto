@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>オルソ化v0.1</title>
+    <title>オルソ化v1.0</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -52,7 +52,6 @@
         .pane-header { background: #ecf0f1; padding: 4px 8px; font-size: 12px; font-weight: bold; text-align: center; border-bottom: 1px solid #ccc; color: #333; }
         .map-container { flex-grow: 1; position: relative; background: #ddd; }
 
-        /* 右マップの切り出し枠（A3横比率: 420x297） */
         #crop-guide {
             position: absolute;
             top: 50%;
@@ -72,23 +71,25 @@
         }
 
         #gcp-panel {
-            position: absolute; bottom: 10px; left: 10px; background: rgba(255, 255, 255, 0.9);
+            position: absolute; bottom: 10px; left: 10px; background: rgba(255, 255, 255, 0.95);
             padding: 8px; border-radius: 6px; box-shadow: 0 0 10px rgba(0,0,0,0.3);
-            width: 90%; max-height: 30%; overflow-y: auto; font-size: 11px; z-index: 1000; color: #333;
+            width: 90%; max-height: 35%; overflow-y: auto; font-size: 11px; z-index: 1000; color: #333;
         }
         table { border-collapse: collapse; width: 100%; margin-top: 4px; }
         th, td { border: 1px solid #ccc; padding: 3px; text-align: center; }
+        /* GCP手入力用のインプットスタイル */
+        .coord-input { width: 75px; font-size: 11px; text-align: center; border: 1px solid #bdc3c7; border-radius: 2px; padding: 2px; }
+        .coord-input:focus { border-color: #3498db; outline: none; background: #e8f4f8; }
     </style>
 </head>
 <body>
 
 <div id="header-controls">
-    <div class="app-title">オルソ化v0.1</div>
+    <div class="app-title">オルソ化v1.0</div>
     
     <button onclick="document.getElementById('file-input').click()">1. 空撮写真読込</button>
     <input type="file" id="file-input" accept=".jpg, .jpeg" style="display: none;">
 
-    <!-- 小刻みな回転ボタン -->
     <div style="display: flex; gap: 4px;">
         <button class="rotate-btn" onclick="rotatePhoto(-5)">↺ 左(5度)</button>
         <button class="rotate-btn" onclick="rotatePhoto(5)">右(5度) ↻</button>
@@ -110,9 +111,9 @@
         <div class="pane-header">【写真】クリックでGCP設置 (青)</div>
         <div class="map-container" id="photo-map"></div>
         <div id="gcp-panel">
-            <b>GCPリスト</b> (左右で3点ペアを作る)
+            <b>GCPリスト</b> (左右で3点ペアを作る。座標は直接入力で修正可)
             <table id="gcp-table">
-                <thead><tr><th>ID</th><th>写真 X</th><th>写真 Y</th><th>地図 緯度</th><th>地図 経度</th></tr></thead>
+                <thead><tr><th>ID</th><th>写真 X</th><th>写真 Y</th><th>地図 緯度 (Lat)</th><th>地図 経度 (Lon)</th></tr></thead>
                 <tbody></tbody>
             </table>
         </div>
@@ -144,7 +145,6 @@
     const osmTile = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
     const esriTile = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 
-    // 左マップ（大幅に縮小できるようminZoomを-5に拡張）
     const photoMap = L.map('photo-map', { crs: L.CRS.Simple, minZoom: -5, maxZoom: 4, zoomSnap: 0.5 });
     
     const centerMap = L.map('center-map').setView([36.065, 136.221], 15);
@@ -160,14 +160,13 @@
     const rightMap = L.map('right-map', { zoomControl: false, maxZoom: 23 }).setView([36.065, 136.221], 15);
     L.tileLayer(stdTile, { maxNativeZoom: 18, maxZoom: 23 }).addTo(rightMap);
 
-    // 中央と右マップの視点を同期
     centerMap.on('move', () => { rightMap.setView(centerMap.getCenter(), centerMap.getZoom(), {animate: false}); });
 
     // ==========================================
     // 2. 写真読み込み・回転・EXIF解析
     // ==========================================
     let currentPhotoObj = null; 
-    let currentRotatedCanvas = null; // 変形元として使用する回転済みキャンバス
+    let currentRotatedCanvas = null; 
     let currentImageOverlay = null;
     let photoRotation = 0;
     
@@ -208,7 +207,6 @@
         const ctx = canvas.getContext('2d');
         const rad = angle * Math.PI / 180;
         
-        // 回転後のバウンディングボックスサイズを計算
         const cos = Math.abs(Math.cos(rad));
         const sin = Math.abs(Math.sin(rad));
         canvas.width = img.width * cos + img.height * sin;
@@ -218,10 +216,9 @@
         ctx.rotate(rad);
         ctx.drawImage(img, -img.width/2, -img.height/2);
 
-        currentRotatedCanvas = canvas; // 後の精密アフィン変換で使用
+        currentRotatedCanvas = canvas;
         const dataUrl = canvas.toDataURL();
         
-        // Leaflet座標系: [0,0]が左下になる
         const bounds = [[0, 0], [canvas.height, canvas.width]];
         currentImageOverlay = L.imageOverlay(dataUrl, bounds).addTo(photoMap);
         photoMap.fitBounds(bounds);
@@ -231,11 +228,11 @@
         if (!currentPhotoObj) return;
         photoRotation = (photoRotation + deg) % 360;
         displayPhoto(currentPhotoObj, photoRotation);
-        resetGCPs(); // 画像が回転すると座標系が変わるためリセット
+        resetGCPs(); 
     };
 
     // ==========================================
-    // 3. GCP設定ロジック
+    // 3. GCP設定ロジック (手入力修正機能追加)
     // ==========================================
     let gcps = [];
     const photoMarkers = L.layerGroup().addTo(photoMap);
@@ -253,7 +250,6 @@
         const id = gcps.length + 1;
         let target = gcps.find(g => g.px === null);
         
-        // Leaflet座標(左下が原点)から、Canvasピクセル座標(左上が原点)への変換
         const px = e.latlng.lng;
         const py = currentRotatedCanvas.height - e.latlng.lat;
 
@@ -283,16 +279,39 @@
         updateGcpTable();
     });
 
+    // ★GCP手動修正時の処理関数
+    window.handleCoordInput = function(id, type, value) {
+        const target = gcps.find(g => g.id === id);
+        if (!target) return;
+        
+        const numVal = parseFloat(value);
+        if (isNaN(numVal)) return;
+
+        if (type === 'lat') target.lat = numVal;
+        if (type === 'lon') target.lon = numVal;
+
+        // マーカーの再配置
+        if (target.lat !== null && target.lon !== null) {
+            if (target.cMarker) centerMarkers.removeLayer(target.cMarker);
+            const latlng = L.latLng(target.lat, target.lon);
+            target.cMarker = L.circleMarker(latlng, {color: 'red', radius: 6}).addTo(centerMarkers).bindTooltip("ID:"+target.id, {permanent:true}).openTooltip();
+        }
+    };
+
     function updateGcpTable() {
         const tbody = document.querySelector('#gcp-table tbody');
         tbody.innerHTML = '';
         gcps.forEach(g => {
+            // Lat/Lonセルをinputタグに変更
+            const latInput = g.lat !== null ? `<input type="text" class="coord-input" value="${g.lat.toFixed(6)}" onchange="handleCoordInput(${g.id}, 'lat', this.value)">` : '-';
+            const lonInput = g.lon !== null ? `<input type="text" class="coord-input" value="${g.lon.toFixed(6)}" onchange="handleCoordInput(${g.id}, 'lon', this.value)">` : '-';
+            
             tbody.innerHTML += `<tr>
                 <td>${g.id}</td>
                 <td>${g.px !== null ? g.px.toFixed(1) : '-'}</td>
                 <td>${g.py !== null ? g.py.toFixed(1) : '-'}</td>
-                <td>${g.lat !== null ? g.lat.toFixed(6) : '-'}</td>
-                <td>${g.lon !== null ? g.lon.toFixed(6) : '-'}</td>
+                <td>${latInput}</td>
+                <td>${lonInput}</td>
             </tr>`;
         });
     }
@@ -309,7 +328,6 @@
             return;
         }
 
-        // 3点を使って元のピクセル座標から地理座標への変換係数を求める
         const p1 = validGcps[0], p2 = validGcps[1], p3 = validGcps[2];
         const det = p1.px * (p2.py - p3.py) - p1.py * (p2.px - p3.px) + (p2.px * p3.py - p3.px * p2.py);
         if (Math.abs(det) < 1e-10) { alert("GCPが一直線上に並んでいるため変換できません。"); return; }
@@ -322,7 +340,6 @@
         const e = (p1.px * (p2.lat - p3.lat) - p1.lat * (p2.px - p3.px) + (p2.px * p3.lat - p3.px * p2.lat)) / det;
         const f = p1.lat - d * p1.px - e * p1.py;
 
-        // 画像の四隅を変換してマップ上の描画範囲（BoundingBox）を求める
         const w = currentRotatedCanvas.width;
         const h = currentRotatedCanvas.height;
         const corners = [{x:0, y:0}, {x:w, y:0}, {x:0, y:h}, {x:w, y:h}];
@@ -335,7 +352,6 @@
             minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
         });
 
-        // ピクセル変形用の新しいキャンバスを作成（解像度維持のため大きめ）
         const canvasW = 2048;
         const canvasH = Math.min(Math.max(Math.floor(canvasW * (maxLat - minLat) / (maxLon - minLon)), 100), 4096);
         
@@ -344,7 +360,6 @@
         warpCanvas.height = canvasH;
         const ctx = warpCanvas.getContext('2d');
 
-        // Canvasのネイティブ機能で行列変換（アフィン変形）を適用
         const A = a * (canvasW / (maxLon - minLon));
         const B = b * (canvasW / (maxLon - minLon));
         const C = (c - minLon) * (canvasW / (maxLon - minLon));
@@ -354,11 +369,8 @@
         const F = (maxLat - f) * (canvasH / (maxLat - minLat));
 
         ctx.setTransform(A, D, B, E, C, F);
-        
-        // 変形させながら描画（背景は自動的に透明になる）
         ctx.drawImage(currentRotatedCanvas, 0, 0);
 
-        // 右マップへオーバーレイ
         const dataUrl = warpCanvas.toDataURL('image/png');
         const overlayBounds = [[minLat, minLon], [maxLat, maxLon]];
         const newLayer = L.imageOverlay(dataUrl, overlayBounds).addTo(rightMap);
@@ -393,7 +405,7 @@
         const nwLatLng = rightMap.containerPointToLatLng(nwPoint);
         const seLatLng = rightMap.containerPointToLatLng(sePoint);
         
-        const outWidth = 2100; // A3横相当の基準幅
+        const outWidth = 2100;
         const outHeight = 1485;
         const canvas = document.createElement('canvas');
         canvas.width = outWidth; canvas.height = outHeight;
@@ -429,23 +441,20 @@
     };
 
     function processExport(canvas, seLatLng, nwLatLng, type) {
-        const dataUrl = canvas.toDataURL('image/png'); // 透明背景のPNG
+        const dataUrl = canvas.toDataURL('image/png'); 
         
-        // 座標値の取得
         const south = seLatLng.lat.toFixed(6);
         const west = nwLatLng.lng.toFixed(6);
         const north = nwLatLng.lat.toFixed(6);
         const east = seLatLng.lng.toFixed(6);
 
         if (type === 'app') {
-            // 林小班図アプリ用: ファイル名に座標を埋め込んだPNGを単体で出力
             const filename = `ortho_export_${south}_${west}_${north}_${east}.png`;
             const imgLink = document.createElement('a');
             imgLink.download = filename;
             imgLink.href = dataUrl;
             imgLink.click();
         } else if (type === 'gis') {
-            // GIS用: PNG本体と、PGW(ワールドファイル)をセットで出力
             const imgLink = document.createElement('a');
             imgLink.download = "ortho_export.png"; 
             imgLink.href = dataUrl;
